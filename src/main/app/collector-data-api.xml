@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule xmlns:json="http://www.mulesoft.org/schema/mule/json" xmlns:mulexml="http://www.mulesoft.org/schema/mule/xml" xmlns:file="http://www.mulesoft.org/schema/mule/file" xmlns:vm="http://www.mulesoft.org/schema/mule/vm" xmlns:tracking="http://www.mulesoft.org/schema/mule/ee/tracking" xmlns:udp="http://www.mulesoft.org/schema/mule/udp" xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+	xmlns:spring="http://www.springframework.org/schema/beans" 
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-current.xsd
+http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/udp http://www.mulesoft.org/schema/mule/udp/current/mule-udp.xsd
+http://www.mulesoft.org/schema/mule/file http://www.mulesoft.org/schema/mule/file/current/mule-file.xsd
+http://www.mulesoft.org/schema/mule/ee/tracking http://www.mulesoft.org/schema/mule/ee/tracking/current/mule-tracking-ee.xsd
+http://www.mulesoft.org/schema/mule/vm http://www.mulesoft.org/schema/mule/vm/current/mule-vm.xsd
+http://www.mulesoft.org/schema/mule/xml http://www.mulesoft.org/schema/mule/xml/current/mule-xml.xsd
+http://www.mulesoft.org/schema/mule/json http://www.mulesoft.org/schema/mule/json/current/mule-json.xsd">
+    <udp:connector name="UDP" validateConnections="true" doc:name="UDP"/>
+    <vm:connector name="VM" validateConnections="true" doc:name="VM">
+        <vm:queue-profile>
+            <simple-in-memory-queue-store/>
+        </vm:queue-profile>
+    </vm:connector>
+    <file:connector name="ErrorDump" autoDelete="true" outputAppend="true" streaming="false" validateConnections="true" doc:name="File"/>
+    <file:connector name="Archive" autoDelete="false" streaming="true" validateConnections="true" doc:name="File"/>
+    <flow name="udpReceiverFlow">
+        <udp:inbound-endpoint exchange-pattern="one-way" host="localhost" port="9999" connector-ref="UDP" responseTimeout="10000" doc:name="UDP"/>
+        <logger message="UDP packet received (#[message.payload.length] bytes)" level="INFO" doc:name="Logger"/>
+        <custom-transformer class="it.essar.collector.api.transformers.BytesToDataPointTransformer" doc:name="BytesToDataPoint"/>
+        <vm:outbound-endpoint exchange-pattern="one-way" path="inboundData" connector-ref="VM" doc:name="VM: inboundData"/>
+        <catch-exception-strategy doc:name="Catch Exception Strategy">
+            <logger message="Failed to process received UDP message! #[payload.message]" level="ERROR" doc:name="Logger"/>
+        </catch-exception-strategy>
+    </flow>
+    <flow name="dataProcessingFlow">
+        <vm:inbound-endpoint exchange-pattern="one-way" path="inboundData" connector-ref="VM" doc:name="VM: inboundData"/>
+        <logger message="Processing data #[message.payload]" level="INFO" doc:name="Logger"/>
+        <component class="it.essar.collector.api.components.AddObservation" doc:name="Java"/>
+        <catch-exception-strategy doc:name="Catch Exception Strategy">
+            <object-to-string-transformer doc:name="Object to String"/>
+            <file:outbound-endpoint path="." outputPattern="message.error" connector-ref="ErrorDump" responseTimeout="10000" doc:name="File"/>
+        </catch-exception-strategy>
+    </flow>
+    <flow name="archiveDataFlow">
+        <poll doc:name="Poll">
+            <fixed-frequency-scheduler frequency="60" timeUnit="SECONDS"/>
+            <component class="it.essar.collector.api.components.GetCollectors" doc:name="GetCollectors"/>
+        </poll>
+        <logger message="Archiving data" level="INFO" doc:name="Logger"/>
+        <json:json-to-object-transformer returnClass="it.essar.collector.api.components.GetCollectors.Response" doc:name="JSON to Object"/>
+        <foreach collection="#[payload.collectorIDs]" doc:name="For Each Collector">
+            <set-session-variable variableName="collectorID" value="#[payload]" doc:name="Set collectionID"/>
+            <component class="it.essar.collector.api.components.GetCollectorData" doc:name="GetCollectorData"/>
+            <mulexml:object-to-xml-transformer doc:name="Object to XML"/>
+            <file:outbound-endpoint path="archive" outputPattern="#[sessionVars.collectorID].xml" connector-ref="Archive" responseTimeout="10000" doc:name="Write to File"/>
+        </foreach>
+        <catch-exception-strategy doc:name="Catch Exception Strategy">
+            <logger message="Failed to archive data! #[payload.message]" level="ERROR" doc:name="Logger"/>
+        </catch-exception-strategy>
+    </flow>
+</mule>

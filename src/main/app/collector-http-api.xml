@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule xmlns:json="http://www.mulesoft.org/schema/mule/json" xmlns:http="http://www.mulesoft.org/schema/mule/http" xmlns:apikit="http://www.mulesoft.org/schema/mule/apikit" xmlns:tracking="http://www.mulesoft.org/schema/mule/ee/tracking" xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+	xmlns:spring="http://www.springframework.org/schema/beans" 
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-current.xsd
+http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+http://www.mulesoft.org/schema/mule/ee/tracking http://www.mulesoft.org/schema/mule/ee/tracking/current/mule-tracking-ee.xsd
+http://www.mulesoft.org/schema/mule/json http://www.mulesoft.org/schema/mule/json/current/mule-json.xsd
+http://www.mulesoft.org/schema/mule/apikit http://www.mulesoft.org/schema/mule/apikit/current/mule-apikit.xsd">
+    <http:listener-config name="HTTP_Collector" host="0.0.0.0" port="8081" doc:name="HTTP Listener Configuration"/>
+    <flow name="registerCollectorFlow">
+        <http:listener config-ref="HTTP_Collector" path="/register" doc:name="HTTP" allowedMethods="POST"/>
+        <logger message="Collector registration request" level="INFO" doc:name="Logger"/>
+        <json:json-to-object-transformer returnClass="it.essar.collector.api.components.RegisterCollector.Request" doc:name="JSON to Object"/>
+        <set-session-variable variableName="groups" value="#[payload.groups]" doc:name="Save groups"/>
+        <component class="it.essar.collector.api.components.RegisterCollector" doc:name="RegisterCollector"/>
+        <set-session-variable variableName="collectorID" value="#[payload]" doc:name="Save collectorID"/>
+        <foreach collection="#[sessionVars.groups]" doc:name="For Each Group">
+            <component class="it.essar.collector.api.components.AddCollectorToGroup" doc:name="AddCollectorToGroup"/>
+            <logger message="Add to group: #[payload]" level="INFO" doc:name="Logger"/>
+        </foreach>
+        <json:object-to-json-transformer doc:name="Object to JSON"/>
+        <logger message="#[&quot;CollectorID = &quot; + message.payload]" level="INFO" doc:name="Logger"/>
+    </flow>
+    <flow name="collectorListFlow">
+        <http:listener config-ref="HTTP_Collector" path="/collectors" allowedMethods="GET" doc:name="HTTP"/>
+        <logger message="Get collectors request" level="INFO" doc:name="Logger"/>
+        <component class="it.essar.collector.api.components.GetCollectors" doc:name="GetCollectors"/>
+        <json:object-to-json-transformer doc:name="Object to JSON"/>
+        <logger message="#[&quot;Collectors: &quot; + message.payload]" level="INFO" doc:name="Logger"/>
+    </flow>
+    <flow name="collectorDetailsFlow">
+        <http:listener config-ref="HTTP_Collector" path="/collectors/{collectorID}" allowedMethods="GET,DELETE" doc:name="HTTP"/>
+        <logger message="Get collector (#[message.inboundProperties.'http.uri.params'.collectorID]) request" level="INFO" doc:name="Logger"/>
+        <set-session-variable variableName="collectorID" value="#[message.inboundProperties.'http.uri.params'.collectorID]" doc:name="Set collectorID"/>
+        <choice doc:name="HTTP Method Router">
+            <when expression="#[message.inboundProperties['http.method'] == 'DELETE']">
+                <component class="it.essar.collector.api.components.UnregisterCollector" doc:name="UnregisterCollector"/>
+                <json:object-to-json-transformer doc:name="Object to JSON"/>
+                <logger message="#[&quot;Collector unregistred: &quot; + message.payload]" level="INFO" doc:name="Logger"/>
+            </when>
+            <otherwise>
+                <component class="it.essar.collector.api.components.GetCollector" doc:name="GetCollector"/>
+                <json:object-to-json-transformer doc:name="Object to JSON"/>
+                <logger message="#[&quot;Collector: &quot; + message.payload]" level="INFO" doc:name="Logger"/>
+            </otherwise>
+        </choice>
+        <apikit:mapping-exception-strategy doc:name="Mapping Exception Strategy">
+            <apikit:mapping statusCode="404">
+                <apikit:exception value="it.essar.collector.NoSuchCollectorException"/>
+            </apikit:mapping>
+        </apikit:mapping-exception-strategy>
+    </flow>
+    <flow name="collectorDataFlow">
+        <http:listener config-ref="HTTP_Collector" path="/collectors/{collectorID}/data" allowedMethods="GET" doc:name="HTTP"/>
+        <logger message="Get collector data (#[message.inboundProperties.'http.uri.params'.collectorID]) request" level="INFO" doc:name="Logger"/>
+        <set-session-variable variableName="collectorID" value="#[message.inboundProperties.'http.uri.params'.collectorID]" doc:name="Set collectorID"/>
+        <component class="it.essar.collector.api.components.GetCollectorData" doc:name="GetCollectorData"/>
+        <json:object-to-json-transformer doc:name="Object to JSON"/>
+        <logger message="Collector data retrieved" level="INFO" doc:name="Logger"/>
+        <apikit:mapping-exception-strategy doc:name="Mapping Exception Strategy">
+            <apikit:mapping statusCode="404">
+                <apikit:exception value="it.essar.collector.NoSuchCollectorException"/>
+            </apikit:mapping>
+        </apikit:mapping-exception-strategy>
+    </flow>
+    <flow name="groupListFlow">
+        <http:listener config-ref="HTTP_Collector" path="/groups" allowedMethods="GET" doc:name="HTTP"/>
+        <logger message="Get groups request" level="INFO" doc:name="Logger"/>
+        <component class="it.essar.collector.api.components.GetGroups" doc:name="GetGroups"/>
+        <json:object-to-json-transformer doc:name="Object to JSON"/>
+        <logger message="#[&quot;Groups: &quot; + message.payload]" level="INFO" doc:name="Logger"/>
+    </flow>
+    <flow name="groupDetailsFlow">
+        <http:listener config-ref="HTTP_Collector" path="/groups/{groupName}" allowedMethods="GET,DELETE" doc:name="HTTP"/>
+        <logger message="Get group (#[message.inboundProperties.'http.uri.params'.groupName]) request" level="INFO" doc:name="Logger"/>
+        <set-session-variable variableName="groupName" value="#[message.inboundProperties.'http.uri.params'.groupName]" doc:name="Set groupName"/>
+        <choice doc:name="HTTP Method Router">
+            <when expression="#[message.inboundProperties['http.method'] == 'DELETE']">
+                <component class="it.essar.collector.api.components.RemoveGroup" doc:name="RemoveGroup"/>
+                <json:object-to-json-transformer doc:name="Object to JSON"/>
+                <logger message="#[&quot;Group removed: &quot; + message.payload]" level="INFO" doc:name="Logger"/>
+            </when>
+            <otherwise>
+                <component class="it.essar.collector.api.components.GetGroupCollectors" doc:name="GetGroupCollectors"/>
+                <json:object-to-json-transformer doc:name="Object to JSON"/>
+                <logger message="#[&quot;Group: &quot; + message.payload]" level="INFO" doc:name="Logger"/>
+            </otherwise>
+        </choice>
+        <apikit:mapping-exception-strategy doc:name="Mapping Exception Strategy">
+            <apikit:mapping statusCode="404">
+                <apikit:exception value="it.essar.collector.NoSuchGroupException"/>
+            </apikit:mapping>
+        </apikit:mapping-exception-strategy>
+    </flow>
+    <flow name="addCollectorToGroupFlow">
+        <http:listener config-ref="HTTP_Collector" path="/groups/{groupName}/{collectorID}" allowedMethods="POST" doc:name="HTTP"/>
+        <logger message="Add to group (#[message.inboundProperties.'http.uri.params'.groupID] | #[message.inboundProperties.'http.uri.params'.collectorID]) request" level="INFO" doc:name="Logger"/>
+        <set-session-variable variableName="collectorID" value="#[message.inboundProperties.'http.uri.params'.collectorID]" doc:name="Set collectorID"/>
+        <set-payload value="#[message.inboundProperties.'http.uri.params'.groupName]" doc:name="Set groupName as Payload"/>
+        <component class="it.essar.collector.api.components.AddCollectorToGroup" doc:name="AddCollectorToGroup"/>
+        <logger message="Added to group: #[payload]" level="INFO" doc:name="Logger"/>
+        <apikit:mapping-exception-strategy doc:name="Mapping Exception Strategy">
+            <apikit:mapping statusCode="404">
+                <apikit:exception value="it.essar.collector.NoSuchCollectorException"/>
+            </apikit:mapping>
+        </apikit:mapping-exception-strategy>
+    </flow>
+</mule>
